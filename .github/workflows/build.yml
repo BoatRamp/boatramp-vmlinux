@@ -1,0 +1,30 @@
+name: build
+
+# Validates that the reproducible microVM kernel compiles. The *boot* validation
+# (booting a guest with boatramp's embedded VMM) lives in the main boatramp repo,
+# which references this flake and runs the live VMM test on a KVM runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build vmlinux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build the microVM kernel
+        run: |
+          nix build .#vmlinux --print-build-logs
+          file result/vmlinux
+          test -f result/vmlinux
