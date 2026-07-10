@@ -1,0 +1,69 @@
+name: release
+
+# On a `v*` tag: build the reproducible microVM kernel, sign its content hash with
+# the ES256 kernel-signing key (an Actions Secret; its public half ships built into
+# boatramp), and publish the kernel + detached signature + hash as Release assets.
+# boatramp's default `compute.default_kernel` points at the latest release, and
+# verifies the download against the pinned hash + signature before booting it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build, sign & publish vmlinux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the microVM kernel
+        run: |
+          nix build .#vmlinux --print-build-logs
+          test -f result/vmlinux
+          # Dereference the store symlink into a writable, well-named asset.
+          install -m 0644 result/vmlinux boatramp-vmlinux-x86_64
+          file boatramp-vmlinux-x86_64
+
+      - name: Sign the kernel hash
+        env:
+          KERNEL_SIGNING_KEY: ${{ secrets.KERNEL_SIGNING_KEY }}
+        run: |
+          if [ -z "$KERNEL_SIGNING_KEY" ]; then
+            echo "::error::KERNEL_SIGNING_KEY secret is not set" >&2
+            exit 1
+          fi
+          # Emits boatramp-vmlinux-x86_64.sha256 and .sig; prints the derived public
+          # key so the log can be cross-checked against BOATRAMP_KERNEL_SIGNING_PUBKEY.
+          cargo run --release --manifest-path tools/kernel-sign/Cargo.toml \
+            -- boatramp-vmlinux-x86_64
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            boatramp-vmlinux-x86_64
+            boatramp-vmlinux-x86_64.sha256
+            boatramp-vmlinux-x86_64.sig
+          body: |
+            Reproducible microVM kernel for boatramp's embedded VMM.
+
+            Verify before use:
+
+            ```sh
+            sha256sum -c <(printf '%s  boatramp-vmlinux-x86_64\n' "$(cat boatramp-vmlinux-x86_64.sha256)")
+            ```
+
+            The `.sig` is a detached ES256 (`r‖s`, hex) signature over the SHA-256
+            **hex string**, verifiable against boatramp's built-in kernel-signing
+            public key. boatramp checks both before booting the kernel.

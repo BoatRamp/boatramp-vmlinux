@@ -34,12 +34,24 @@ security posture:
   *verified*, not trust-on-first-use.
 - **Single-tenant / dev:** a verified hash pin suffices.
 
+## Releasing
+
+`tools/kernel-sign` is a tiny standalone signer (P-256 / ES256, RustCrypto) that
+signs the kernel's SHA-256 **hex string** into a detached 64-byte `r‖s` hex
+signature — byte-compatible with boatramp-core's `verify_kernel` (unlike
+python-ecdsa, which can emit high-S). It self-verifies before writing and prints
+the derived public key so it can be cross-checked against the key built into
+boatramp.
+
+To cut a release, push a `v*` tag: the `release` workflow builds the kernel, signs
+it with the `KERNEL_SIGNING_KEY` Actions Secret, and publishes
+`boatramp-vmlinux-x86_64` + `.sha256` + `.sig` as Release assets. boatramp's
+default `compute.default_kernel` points at the latest release and verifies the
+download against the pinned hash + signature before booting.
+
 ## CI
 
 - **`build`** — validates the kernel compiles (this repo).
+- **`release`** — on a `v*` tag, builds + signs + publishes (above).
 - **Boot validation** lives in the main boatramp repo, which references this flake
   and boots a guest with the embedded VMM on a KVM runner.
-- **`release`** *(wip)* — on a `v*` tag: build, sign the kernel hash with the
-  Actions-Secret signing key, and publish `boatramp-vmlinux-<arch>` + `.sig` +
-  `.sha256` as GitHub Release assets. boatramp's default `compute.default_kernel`
-  points at the latest release.
