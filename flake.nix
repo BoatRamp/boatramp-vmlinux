@@ -40,13 +40,24 @@
                 url = "https://raw.githubusercontent.com/firecracker-microvm/firecracker/v1.10.1/resources/guest_configs/microvm-kernel-ci-x86_64-6.1.config";
                 hash = "sha256-OR2NSY+J5Ws5G+XqSnUB68RObQlDMeyqve/tHaayipY=";
               };
+              # The boatramp in-process embedded rust-vmm VMM advertises virtio-MMIO
+              # devices via the `virtio_mmio.device=<size>@<addr>:<irq>` kernel
+              # cmdline; the stock Firecracker config ships
+              # CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES off (its binary backend discovers
+              # over ACPI), so without this the guest never sees `/dev/vda`. Enable it
+              # (additive; the ACPI path is unaffected). MUST match the main boatramp
+              # flake's `#vmlinux` patch byte-for-byte.
+              config = pkgs.runCommand "boatramp-vmlinux.config" { } ''
+                sed 's/# CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES is not set/CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y/' \
+                  ${fcConfig} > "$out"
+              '';
               # nixpkgs only keeps `vmlinux` for MODULAR kernels; this one has
               # CONFIG_MODULES off, so copy the uncompressed ELF into $out ourselves
               # (fixupPhase strips it — still Elf::load-able). `$buildRoot` is the
               # exported out-of-tree build dir.
               micro = (pkgs.linuxManualConfig {
                 inherit (pkgs.linux_6_1) version src;
-                configfile = fcConfig;
+                configfile = config;
                 allowImportFromDerivation = true;
               }).overrideAttrs (old: {
                 postInstall = (old.postInstall or "") + ''
