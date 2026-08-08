@@ -16,8 +16,20 @@ permissions:
 
 jobs:
   release:
-    name: build, sign & publish vmlinux
-    runs-on: ubuntu-latest
+    name: build, sign & publish vmlinux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 kernel (the KVM embedded VMM) on an x86_64 runner; aarch64 kernel
+          # (the macOS Virtualization.framework `vmm-vz` backend) on an arm64 runner.
+          # `nix build .#vmlinux` builds the running system's arch (the flake is
+          # per-system), so each runner produces its own kernel natively.
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
 
@@ -31,8 +43,8 @@ jobs:
           nix build .#vmlinux --print-build-logs
           test -f result/vmlinux
           # Dereference the store symlink into a writable, well-named asset.
-          install -m 0644 result/vmlinux boatramp-vmlinux-x86_64
-          file boatramp-vmlinux-x86_64
+          install -m 0644 result/vmlinux boatramp-vmlinux-${{ matrix.arch }}
+          file boatramp-vmlinux-${{ matrix.arch }}
 
       - name: Sign the kernel hash
         env:
@@ -42,28 +54,30 @@ jobs:
             echo "::error::KERNEL_SIGNING_KEY secret is not set" >&2
             exit 1
           fi
-          # Emits boatramp-vmlinux-x86_64.sha256 and .sig; prints the derived public
+          # Emits boatramp-vmlinux-<arch>.sha256 and .sig; prints the derived public
           # key so the log can be cross-checked against BOATRAMP_KERNEL_SIGNING_PUBKEY.
           cargo run --release --manifest-path tools/kernel-sign/Cargo.toml \
-            -- boatramp-vmlinux-x86_64
+            -- boatramp-vmlinux-${{ matrix.arch }}
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           files: |
-            boatramp-vmlinux-x86_64
-            boatramp-vmlinux-x86_64.sha256
-            boatramp-vmlinux-x86_64.sig
+            boatramp-vmlinux-${{ matrix.arch }}
+            boatramp-vmlinux-${{ matrix.arch }}.sha256
+            boatramp-vmlinux-${{ matrix.arch }}.sig
           body: |
-            Reproducible microVM kernel for boatramp's embedded VMM.
+            Reproducible microVM kernels for boatramp's VMM backends: the `x86_64`
+            kernel boots the Linux/KVM embedded VMM; the `aarch64` kernel boots the
+            macOS Virtualization.framework (`vmm-vz`) backend (a raw arm64 `Image`).
 
-            Verify before use:
+            Verify before use (per arch):
 
             ```sh
-            sha256sum -c <(printf '%s  boatramp-vmlinux-x86_64\n' "$(cat boatramp-vmlinux-x86_64.sha256)")
+            sha256sum -c <(printf '%s  boatramp-vmlinux-<arch>\n' "$(cat boatramp-vmlinux-<arch>.sha256)")
             ```
 
-            The `.sig` is a detached ES256 (`r‖s`, hex) signature over the SHA-256
+            Each `.sig` is a detached ES256 (`r‖s`, hex) signature over the SHA-256
             **hex string**, verifiable against boatramp's built-in kernel-signing
             public key. boatramp checks both before booting the kernel.
