@@ -56,13 +56,25 @@
               # off (its binary backend discovers over ACPI), so without this the guest
               # never sees `/dev/vda`. Enable it (additive). MUST match the main
               # boatramp flake's `#vmlinux` patch byte-for-byte.
-              # aarch64: Virtualization.framework presents its virtio devices via the
-              # guest **device tree** it generates, so no cmdline-devices patch is
-              # needed (VIRTIO_MMIO + virtio-blk/net/console + ext4 are already =y);
-              # the config is used verbatim.
+              # aarch64: Virtualization.framework presents its virtio devices to the
+              # guest over a generic **PCIe host bridge (ECAM)**, not the cmdline
+              # virtio-mmio the Firecracker config targets — so the stock config
+              # (CONFIG_PCI off) finds no devices and never boots. Enable the generic
+              # PCIe host + virtio-pci so VZ's disk/net/console are discovered.
+              # (virtio-mmio stays on too, harmlessly.)
               config =
                 if isArm then
-                  fcConfig
+                  pkgs.runCommand "boatramp-vmlinux.config" { } ''
+                    grep -vE '^(# )?CONFIG_(PCI|PCI_HOST_GENERIC|PCI_HOST_COMMON|PCI_ECAM|VIRTIO_PCI)( is not set|=)' \
+                      ${fcConfig} > "$out"
+                    {
+                      echo CONFIG_PCI=y
+                      echo CONFIG_PCI_HOST_COMMON=y
+                      echo CONFIG_PCI_HOST_GENERIC=y
+                      echo CONFIG_PCI_ECAM=y
+                      echo CONFIG_VIRTIO_PCI=y
+                    } >> "$out"
+                  ''
                 else
                   pkgs.runCommand "boatramp-vmlinux.config" { } ''
                     sed 's/# CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES is not set/CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y/' \
@@ -80,6 +92,13 @@
                 configfile = config;
                 allowImportFromDerivation = true;
               }).overrideAttrs (old: {
+                # nixpkgs marks kernels `requiredSystemFeatures = ["big-parallel"]`,
+                # which the stock nix-darwin linux-builder doesn't advertise; this
+                # minimal kernel builds fine without it and the hint doesn't affect
+                # the output bytes, so drop it (native CI runners are unaffected).
+                # MUST match the main boatramp flake's `#vmlinux` so both are byte-
+                # identical.
+                requiredSystemFeatures = [ ];
                 postInstall = (old.postInstall or "") + ''
                   cp "$buildRoot/${kernelRel}" "$out/${kernelName}"
                 '';
